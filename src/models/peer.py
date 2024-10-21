@@ -3,7 +3,7 @@ import socket
 import threading
 import math
 
-from utils.files_reader import read_topology_file, read_config_file
+from utils.files_reader import read_topology_file, read_config_file, read_file_metadata
 from utils.constants import Constants
 from models.neighbor import Neighbor
 from models.udpserver import UDPServer
@@ -24,24 +24,9 @@ class Peer:
         self._tcp_server = None
         print(self)
 
-    def _fetch_config_info_and_create_neighbors(self, config_components):
-        self._neighbors = []
-
-        for comp in config_components:
-            if comp['id'] == self._id:
-                self._address, self._udp_port, self._speed = comp['address'], comp['udp_port'], comp['speed']
-                continue
-
-            del comp['speed']
-            self._neighbors.append(Neighbor(*comp.values()))
-
     def __str__(self):
         neighbors = '. '.join([str(n) for n in self._neighbors])
         return f'Peer {self._id} ready: {self._address}, {self._udp_port}, {self._speed}. {neighbors}'
-
-    def _create_udp_server(self):
-        self._udp_server = UDPServer(self._address, self._udp_port, self)
-        self._udp_server.start()
 
     @property
     def id(self):
@@ -55,14 +40,74 @@ class Peer:
     def udp_server(self):
         return self._udp_server
 
-    @property
     def speed(self):
-        if self._active_tcp_connections == 0:
-            return self._speed
+        with self._active_tcp_connections_lock:
+            if self._active_tcp_connections == 0:
+                return self._speed
 
-        return math.floor(self._speed / self._active_tcp_connections)
+            return math.floor(self._speed / (self._active_tcp_connections + 1))
 
-    def verify_metadata_file_validity(self, metadata_file):
+    def _fetch_config_info_and_create_neighbors(self, config_components):
+        self._neighbors = []
+
+        for comp in config_components:
+            if comp['id'] == self._id:
+                self._address, self._udp_port, self._speed = comp['address'], comp['udp_port'], comp['speed']
+                continue
+
+            del comp['speed']
+            self._neighbors.append(Neighbor(*comp.values()))
+
+    def _create_udp_server(self):
+        self._udp_server = UDPServer(self._address, self._udp_port, self)
+        self._udp_server.start()
+
+    def run(self, metadata_file):
+        if not self._verify_metadata_file_validity(metadata_file):
+            return
+
+        requested_file, chunks, ttl = read_file_metadata(self._id, metadata_file)
+        if not self._verify_file_need(requested_file):
+            return
+
+        self._create_file_buffer(chunks, requested_file)
+
+        if self._verify_all_chunks_present_locally(requested_file):
+            return
+
+        client = self._flooding_client(ttl, requested_file)
+        client.start()
+        client.join()
+
+        if self._verify_file_unretrievable():
+            return
+
+        fetching_technique = self._choose_fetching_technique()
+        if fetching_technique == 'chunks':
+            grouped_chunks = self._group_chunks_by_address_and_port()
+
+            semaphore = threading.Semaphore(Constants.MAX_TCP_CLIENTS)
+            clients = []
+
+            for address_and_port, chunks in grouped_chunks.items():
+                print('Waiting for all chunks to be fetched!')
+
+                semaphore.acquire()
+
+                tcp_client = self._create_tcp_client(address_and_port, chunks, semaphore)
+                clients.append(tcp_client)
+                tcp_client.start()
+
+            for client in clients:
+                client.join()
+
+            self._create_full_file(requested_file)
+        else:
+            self._fetch_full_file()
+
+            print('File downloaded!')
+
+    def _verify_metadata_file_validity(self, metadata_file):
         peer_folder = Constants.FILES_PATH / str(self._id)
         filenames = [f.name for f in peer_folder.iterdir() if f.is_file()]
 
@@ -72,7 +117,7 @@ class Peer:
 
         return True
 
-    def verify_file_need(self, requested_file):
+    def _verify_file_need(self, requested_file):
         peer_folder = Constants.FILES_PATH / str(self._id)
         filenames = [f.name for f in peer_folder.iterdir() if f.is_file()]
 
@@ -82,7 +127,7 @@ class Peer:
 
         return True
 
-    def create_file_buffer(self, chunks, requested_file):
+    def _create_file_buffer(self, chunks, requested_file):
         peer_folder = Constants.FILES_PATH / str(self._id)
         filenames = [f.name for f in peer_folder.iterdir() if f.is_file()]
 
@@ -99,15 +144,22 @@ class Peer:
                     'time': 0
                 }
 
-    def verify_all_chunks_present_locally(self, requested_filename):
+    def _verify_all_chunks_present_locally(self, requested_filename):
         if all(c is not None for c in self._buffer[:-1]):
             print('Peer has all chunks locally')
-            self.create_full_file(requested_filename)
+            self._create_full_file(requested_filename)
             return True
 
         return False
 
-    def create_full_file(self, output_filename):
+    def _flooding_client(self, ttl, requested_file):
+        client_address = self._address
+        client_port = Constants.UDP_CLIENT_PORT + self._id
+        message = self._build_flooding_request(self._id, ttl, client_address, client_port, requested_file)
+
+        return UDPClient(client_address, client_port, self._neighbors, self._buffer, message, requested_file, blocking = True)
+
+    def _create_full_file(self, output_filename):
         peer_folder = Constants.FILES_PATH / str(self._id)
 
         with open(peer_folder / output_filename, 'wb') as of:
@@ -117,63 +169,17 @@ class Peer:
 
         print('Full file created!')
 
-    def flooding_client(self, ttl, requested_file):
-        client_address = self._address
-        client_port = Constants.UDP_CLIENT_PORT + self._id
-        message = self._build_flooding_request(self._id, ttl, client_address, client_port, requested_file)
-
-        return UDPClient(client_address, client_port, self._neighbors, self._buffer, message, requested_file, blocking = True)
-
-    def reroute(self, ttl, client_id, client_address, client_port, filename):
-        message = self._build_flooding_request(client_id, ttl, client_address, client_port, filename)
-
-        neighbors = [n for n in self._neighbors if n.id != client_id]
-
-        client = UDPClient(self._address, Constants.UDP_CLIENT_PORT + self._id, neighbors, None, message, filename)
-        client.start()
-
     def _build_flooding_request(self, id, ttl, client_address, client_port, filename):
         return struct.pack(Constants.FLOODING_REQUEST_FORMAT, ttl, id, socket.inet_aton(client_address), client_port, filename.encode('utf-8'))
 
-    def flooding_response(self, chunks, entire_file, entire_file_size):
-        self._tcp_port = Constants.TCP_SERVER_PORT + self._id
-        if not self._tcp_server:
-            self._active_tcp_connections = 0
-            self._active_tcp_connections_lock = threading.Lock()
-            self._tcp_server = TCPServer(self._address, self._tcp_port, self)
-            self._tcp_server.start()
-
-        return self._build_flooding_response(self._id, self._address, self._tcp_port, chunks, entire_file, self._sending_time(entire_file_size))
-
-    def _sending_time(self, size):
-        return int(size / self._speed)
-
-    def change_active_tcp_connections(self, change):
-        with self._active_tcp_connections_lock:
-            self._active_tcp_connections += change
-
-    def _build_flooding_response(self, id, server_address, server_port, chunks, entire_file, entire_file_time):
-        chunk_number = len(chunks)
-
-        response_message = struct.pack(
-            Constants.FLOODING_RESPONSE_INITIAL_FORMAT, id, socket.inet_aton(server_address), server_port, entire_file, entire_file_time, chunk_number
-        )
-
-        for chunk_name, chunk_size in chunks.items():
-            chunk_data = struct.pack(Constants.FLOODING_RESPONSE_CHUNK_FORMAT, self._sending_time(chunk_size), chunk_name.encode('utf-8').ljust(255, b'\x00'))
-
-            response_message += chunk_data
-
-        return response_message
-
-    def verify_file_unretrievable(self):
+    def _verify_file_unretrievable(self):
         if all(c is not None for c in self._buffer[:-1]) or self._buffer[-1] is not None:
             return False
 
         print('Cannot find full file!')
         return True
 
-    def choose_fetching_technique(self):
+    def _choose_fetching_technique(self):
         chunk_fetching_time = float('inf')
         if all(c is not None for c in self._buffer[:-1]):
             chunk_fetching_time = sum(c['time'] for c in self._buffer[:-1])
@@ -187,7 +193,7 @@ class Peer:
 
         return 'chunks'
 
-    def group_chunks_by_address_and_port(self):
+    def _group_chunks_by_address_and_port(self):
         grouped_chunks = {}
 
         for c in self._buffer[:-1]:
@@ -202,7 +208,7 @@ class Peer:
 
         return grouped_chunks
 
-    def fetch_full_file(self):
+    def _fetch_full_file(self):
         info = self._buffer[-1]
 
         tcp_client = self.create_tcp_client(f"{info['address']} {info['port']}", [info['chunk']])
@@ -210,15 +216,33 @@ class Peer:
         tcp_client.start()
         tcp_client.join()
 
-    def create_tcp_client(self, address_and_port, chunks, semaphore = None):
+    def _create_tcp_client(self, address_and_port, chunks, semaphore = None):
         address, port = address_and_port.split(' ')
         port = int(port)
 
-        return TCPClient(self, address, port, semaphore, chunks[0].split('.ch')[0], self._build_chunks_request(chunks))
+        return TCPClient(self, address, port, semaphore, chunks[0].split('.ch')[0], chunks)
 
-    def _build_chunks_request(self, chunks):
-        chunk_number = len(chunks)
-        message_format = Constants.CHUNKS_REQUEST_INITIAL_FORMAT + f'{chunk_number * 255}s'
-        chunks = [c.encode('utf-8').ljust(255, b'\x00') for c in chunks]
+    def reroute(self, ttl, client_id, client_address, client_port, filename):
+        message = self._build_flooding_request(client_id, ttl, client_address, client_port, filename)
 
-        return struct.pack(message_format, chunk_number, b''.join(chunks))
+        neighbors = [n for n in self._neighbors if n.id != client_id]
+
+        client = UDPClient(self._address, Constants.UDP_REROUTE_PORT + self._id, neighbors, None, message, filename)
+        client.start()
+
+    def create_tcp_server(self):
+        if not self._tcp_server:
+            self._tcp_port = Constants.TCP_SERVER_PORT + self._id
+            self._active_tcp_connections = 0
+            self._active_tcp_connections_lock = threading.Lock()
+            self._tcp_server = TCPServer(self._address, self._tcp_port, self)
+            self._tcp_server.start()
+
+        return self._tcp_server
+
+    def sending_time(self, size):
+        return size // self.speed()
+
+    def change_active_tcp_connections(self, change):
+        with self._active_tcp_connections_lock:
+            self._active_tcp_connections += change

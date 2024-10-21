@@ -7,7 +7,7 @@ import shutil
 from utils.constants import Constants
 
 class TCPClient(threading.Thread):
-    def __init__(self, peer, address, port, semaphore, filename, message):
+    def __init__(self, peer, address, port, semaphore, filename, chunks):
         super().__init__()
         
         self._peer = peer
@@ -19,7 +19,14 @@ class TCPClient(threading.Thread):
         self._semaphore = semaphore
 
         self._filename = filename
-        self._message = message
+        self._message = self._build_chunks_request(chunks)
+
+    def _build_chunks_request(self, chunks):
+        chunk_number = len(chunks)
+        message_format = Constants.CHUNKS_REQUEST_INITIAL_FORMAT + f'{chunk_number * 255}s'
+        chunks = [c.encode('utf-8').ljust(255, b'\x00') for c in chunks]
+
+        return struct.pack(message_format, chunk_number, b''.join(chunks))
 
     def run(self):
         print('TCP Client running...')

@@ -13,10 +13,17 @@ class TCPServer(threading.Thread):
         self._address = address
         self._port = port
         self._peer = peer
-        self._speed = self._peer.speed
 
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.bind((self._address, self._port))
+
+    @property
+    def address(self):
+        return self._address
+
+    @property
+    def port(self):
+        return self._port
 
     def run(self):
         self._socket.listen(3)
@@ -51,7 +58,7 @@ def transfer_files(connection, peer, socket):
                 filepath = Constants.FILES_PATH / str(peer.id) / c
                 with open(filepath, 'rb') as f:
                     while True:
-                        bytes_to_read = peer.speed - 3
+                        bytes_to_read = peer.speed() - 3
                         content = f.read(bytes_to_read)
 
                         if not content:

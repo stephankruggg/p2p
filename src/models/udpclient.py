@@ -19,7 +19,7 @@ class UDPClient(threading.Thread):
 
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.bind((self._address, self._port))
-        self._socket.settimeout(5)
+        self._socket.settimeout(Constants.UDP_CLIENT_TIMEOUT)
 
     def run(self):
         for s in self._servers:
@@ -41,7 +41,7 @@ class UDPClient(threading.Thread):
 
                         chunks[chunk_name] = chunk_time
 
-                    print(f'Received response from ID -> {peer_id}: TCP address -> {tcp_address}, TCP port -> {tcp_port}, Full file present -> {full_file_present}, Full file time -> {full_file_time}, Number of chunks -> {number_of_chunks}, Chunks -> {chunks.keys()}')
+                    print(f'Received response from ID -> {peer_id}: TCP address -> {tcp_address}, TCP port -> {tcp_port}, Full file present -> {full_file_present}, Full file time -> {full_file_time}, Number of chunks -> {number_of_chunks}, Chunks -> {list(chunks.keys())}')
             
                     for chunk_name, chunk_time in chunks.items():
                         chunk_number = int(re.search(r'\.ch(\d+)', chunk_name).group(1))
@@ -62,7 +62,6 @@ class UDPClient(threading.Thread):
                                 'port': tcp_port,
                                 'time': full_file_time
                             }
-
             except socket.timeout:
                 print('UDP Client timed out!')
             finally:
