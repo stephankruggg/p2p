@@ -28,8 +28,9 @@ class TCPServer(threading.Thread):
             
             print(f'TCP Server connected to: {address}')
 
-            threading.Thread(target=transfer_files, args=(connection, self._peer, self._socket)).start()
+            self._peer.change_active_tcp_connections(1)
 
+            threading.Thread(target=transfer_files, args=(connection, self._peer, self._socket)).start()
 
 def transfer_files(connection, peer, socket):
     print('TCP Server ready to send files...')
@@ -50,7 +51,7 @@ def transfer_files(connection, peer, socket):
                 filepath = Constants.FILES_PATH / str(peer.id) / c
                 with open(filepath, 'rb') as f:
                     while True:
-                        bytes_to_read = peer.speed - 3 # Todo: Control speed
+                        bytes_to_read = peer.speed - 3
                         content = f.read(bytes_to_read)
 
                         if not content:
@@ -75,6 +76,7 @@ def transfer_files(connection, peer, socket):
             traceback.print_exc()
         finally:
             socket.close()
+            peer.change_active_tcp_connections(-1)
             print('TCP Server -> Connection closed!')
 
 def build_file_transfer_message(number, full_file, content):

@@ -30,13 +30,20 @@ class UDPClient(threading.Thread):
                 while True:
                     data, _ = self._socket.recvfrom(4096)
 
-                    peer_id, tcp_address, tcp_port, full_file_present, full_file_time, chunk_time, number_of_chunks = struct.unpack(Constants.FLOODING_RESPONSE_INITIAL_FORMAT, data[:14])
+                    peer_id, tcp_address, tcp_port, full_file_present, full_file_time, number_of_chunks = struct.unpack(Constants.FLOODING_RESPONSE_INITIAL_FORMAT, data[:12])
                     tcp_address = socket.inet_ntoa(tcp_address)
-                    chunk_data = struct.unpack(f'{number_of_chunks * 255}s', data[14:])[0]
-                    chunks = [chunk_data[i:i+255].rstrip(b'\x00').decode('utf-8') for i in range(0, len(chunk_data), 255)]
-                    print(f'Received response from ID -> {peer_id}: TCP address -> {tcp_address}, TCP port -> {tcp_port}, Full file present -> {full_file_present}, Full file time -> {full_file_time}, Chunk time -> {chunk_time}, Number of chunks -> {number_of_chunks}, Chunks -> {chunks}')
+
+                    chunks = {}
+                    for i in range(12, len(data[12:]), 259):
+                        chunk_time, chunk_name = struct.unpack(Constants.FLOODING_RESPONSE_CHUNK_FORMAT, data[i:i+259])
+                        chunk_time = int(chunk_time)
+                        chunk_name = chunk_name.rstrip(b'\x00').decode('utf-8')
+
+                        chunks[chunk_name] = chunk_time
+
+                    print(f'Received response from ID -> {peer_id}: TCP address -> {tcp_address}, TCP port -> {tcp_port}, Full file present -> {full_file_present}, Full file time -> {full_file_time}, Number of chunks -> {number_of_chunks}, Chunks -> {chunks.keys()}')
             
-                    for chunk_name in chunks:
+                    for chunk_name, chunk_time in chunks.items():
                         chunk_number = int(re.search(r'\.ch(\d+)', chunk_name).group(1))
 
                         if not self._buffer[chunk_number] or self._buffer[chunk_number]['time'] > chunk_time:

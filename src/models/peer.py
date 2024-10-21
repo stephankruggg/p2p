@@ -1,5 +1,7 @@
 import struct
 import socket
+import threading
+import math
 
 from utils.files_reader import read_topology_file, read_config_file
 from utils.constants import Constants
@@ -55,7 +57,10 @@ class Peer:
 
     @property
     def speed(self):
-        return self._speed
+        if self._active_tcp_connections == 0:
+            return self._speed
+
+        return math.floor(self._speed / self._active_tcp_connections)
 
     def verify_metadata_file_validity(self, metadata_file):
         peer_folder = Constants.FILES_PATH / str(self._id)
@@ -130,26 +135,38 @@ class Peer:
     def _build_flooding_request(self, id, ttl, client_address, client_port, filename):
         return struct.pack(Constants.FLOODING_REQUEST_FORMAT, ttl, id, socket.inet_aton(client_address), client_port, filename.encode('utf-8'))
 
-    def flooding_response(self, chunks, entire_file):
+    def flooding_response(self, chunks, entire_file, entire_file_size):
         self._tcp_port = Constants.TCP_SERVER_PORT + self._id
         if not self._tcp_server:
+            self._active_tcp_connections = 0
+            self._active_tcp_connections_lock = threading.Lock()
             self._tcp_server = TCPServer(self._address, self._tcp_port, self)
             self._tcp_server.start()
 
-        # Todo: estimate time for chunk and entire file based on concurrent connections
-        return self._build_flooding_response(self._id, self._address, self._tcp_port, chunks, self._speed, entire_file, self._speed)
+        return self._build_flooding_response(self._id, self._address, self._tcp_port, chunks, entire_file, self._sending_time(entire_file_size))
 
-    def _build_flooding_response(self, id, server_address, server_port, chunks, chunk_speed, entire_file, entire_file_speed):
+    def _sending_time(self, size):
+        return int(size / self._speed)
+
+    def change_active_tcp_connections(self, change):
+        with self._active_tcp_connections_lock:
+            self._active_tcp_connections += change
+
+    def _build_flooding_response(self, id, server_address, server_port, chunks, entire_file, entire_file_time):
         chunk_number = len(chunks)
-        response_message_format = Constants.FLOODING_RESPONSE_INITIAL_FORMAT + f'{chunk_number * 255}s'
-        chunks = [c.encode('utf-8').ljust(255, b'\x00') for c in chunks]
 
-        return struct.pack(
-            response_message_format, id, socket.inet_aton(server_address), server_port, entire_file, entire_file_speed, chunk_speed, chunk_number, b''.join(chunks)
+        response_message = struct.pack(
+            Constants.FLOODING_RESPONSE_INITIAL_FORMAT, id, socket.inet_aton(server_address), server_port, entire_file, entire_file_time, chunk_number
         )
 
+        for chunk_name, chunk_size in chunks.items():
+            chunk_data = struct.pack(Constants.FLOODING_RESPONSE_CHUNK_FORMAT, self._sending_time(chunk_size), chunk_name.encode('utf-8').ljust(255, b'\x00'))
+
+            response_message += chunk_data
+
+        return response_message
+
     def verify_file_unretrievable(self):
-        print(self._buffer)
         if all(c is not None for c in self._buffer[:-1]) or self._buffer[-1] is not None:
             return False
 
@@ -157,7 +174,6 @@ class Peer:
         return True
 
     def choose_fetching_technique(self):
-        print(self._buffer)
         chunk_fetching_time = float('inf')
         if all(c is not None for c in self._buffer[:-1]):
             chunk_fetching_time = sum(c['time'] for c in self._buffer[:-1])

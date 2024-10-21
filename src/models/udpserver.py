@@ -36,19 +36,24 @@ class UDPServer(threading.Thread):
             print(f'Received request from ID -> {requester_id}, ADDRESS -> {requester_address}, PORT -> {requester_port}: TTL -> {ttl}, FILENAME -> {requested_file}')
 
             peer_folder = Constants.FILES_PATH / str(self._peer.id)
-            filenames = [f.name for f in peer_folder.iterdir() if f.is_file()]
-            chunks = []
+            files = [f for f in peer_folder.iterdir() if f.is_file()]
+            chunks = {}
             entire_file = False
+            entire_file_size = 0
 
-            for f in filenames:
-                if f.startswith(requested_file):
-                    if f == requested_file:
+            for f in files:
+                filename = f.name
+                if filename.startswith(requested_file):
+                    size = f.stat().st_size
+                    if filename == requested_file:
                         entire_file = True
+                        entire_file_size = size
+
                         continue
 
-                    chunks.append(f)
+                    chunks[filename] = size
 
-            response = self._peer.flooding_response(chunks, entire_file)
+            response = self._peer.flooding_response(chunks, entire_file, entire_file_size)
             self._socket.sendto(response, (requester_address, requester_port))
 
             ttl -= 1
