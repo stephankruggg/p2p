@@ -1,7 +1,7 @@
 from pathlib import Path
 
 class Constants:
-    FILES_PATH = Path('..') / 'example'
+    FILES_PATH = Path('example')
 
     TCP_SERVER_PORT = 4000
     UDP_REROUTE_PORT = 4100
