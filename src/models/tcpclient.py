@@ -22,11 +22,14 @@ class TCPClient(threading.Thread):
         self._message = self._build_chunks_request(chunks)
 
     def _build_chunks_request(self, chunks):
-        chunk_number = len(chunks)
-        message_format = Constants.CHUNKS_REQUEST_INITIAL_FORMAT + f'{chunk_number * 255}s'
-        chunks = [c.encode('utf-8').ljust(255, b'\x00') for c in chunks]
+        number_of_chunks = len(chunks)
 
-        return struct.pack(message_format, chunk_number, b''.join(chunks))
+        if number_of_chunks == 0:
+            message_format = Constants.CHUNKS_REQUEST_INITIAL_FORMAT
+            return struct.pack(message_format, number_of_chunks, self._filename.encode('utf-8').ljust(255, b'\x00'))
+        
+        message_format = Constants.CHUNKS_REQUEST_INITIAL_FORMAT + f'{number_of_chunks}I'
+        return struct.pack(message_format, number_of_chunks, self._filename.encode('utf-8').ljust(255, b'\x00'), *chunks)
 
     def run(self):
         print('TCP Client running...')

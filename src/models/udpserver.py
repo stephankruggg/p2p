@@ -1,6 +1,7 @@
 import threading
 import socket
 import struct
+import re
 from time import sleep
 
 from utils.constants import Constants
@@ -51,10 +52,10 @@ class UDPServer(threading.Thread):
 
                         continue
 
-                    chunks[filename] = size
+                    chunks[int(re.search(r'\.ch(\d+)', filename).group(1))] = size
 
             tcp_server = self._peer.create_tcp_server()
-            response = self._flooding_response(tcp_server, chunks, entire_file, entire_file_size)
+            response = self._flooding_response(tcp_server, chunks, entire_file, entire_file_size, requested_file)
             self._socket.sendto(response, (requester_address, requester_port))
 
             ttl -= 1
@@ -62,15 +63,15 @@ class UDPServer(threading.Thread):
                 sleep(1)
                 self._peer.reroute(ttl, requester_id, requester_address, requester_port, requested_file)
 
-    def _flooding_response(self, tcp_server, chunks, entire_file, entire_file_size):
+    def _flooding_response(self, tcp_server, chunks, entire_file, entire_file_size, filename):
         chunk_number = len(chunks)
 
         response_message = struct.pack(
-            Constants.FLOODING_RESPONSE_INITIAL_FORMAT, self._peer.id, socket.inet_aton(tcp_server.address), tcp_server.port, entire_file, self._peer.sending_time(entire_file_size), chunk_number
+            Constants.FLOODING_RESPONSE_INITIAL_FORMAT, self._peer.id, socket.inet_aton(tcp_server.address), tcp_server.port, entire_file, self._peer.sending_time(entire_file_size), chunk_number, filename.encode('utf-8').ljust(255, b'\x00')
         )
 
-        for chunk_name, chunk_size in chunks.items():
-            chunk_data = struct.pack(Constants.FLOODING_RESPONSE_CHUNK_FORMAT, self._peer.sending_time(chunk_size), chunk_name.encode('utf-8').ljust(255, b'\x00'))
+        for chunk_number, chunk_size in chunks.items():
+            chunk_data = struct.pack(Constants.FLOODING_RESPONSE_CHUNK_FORMAT, self._peer.sending_time(chunk_size), chunk_number)
 
             response_message += chunk_data
 

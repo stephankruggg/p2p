@@ -45,32 +45,32 @@ def transfer_files(connection, peer, socket):
     with connection:
         try:
             data, _ = connection.recvfrom(4096)
-            number_of_chunks = struct.unpack(Constants.CHUNKS_REQUEST_INITIAL_FORMAT, data[:1])[0]
+            number_of_chunks, filename = struct.unpack(Constants.CHUNKS_REQUEST_INITIAL_FORMAT, data[:256])
 
-            chunk_data = struct.unpack(f'{number_of_chunks * 255}s', data[1:])[0]
-            chunks = [chunk_data[i:i+255].rstrip(b'\x00').decode('utf-8') for i in range(0, len(chunk_data), 255)]
+            filename = filename.rstrip(b'\x00').decode('utf-8')
 
-            print(f'TCP Server received request to send: Number of Chunks -> {number_of_chunks}, Chunks -> {chunks}')
+            if number_of_chunks != 0:
+                chunks = list(struct.unpack(f'>{number_of_chunks}I', data[256:]))
+            else:
+                chunks = []
 
-            for i, c in enumerate(chunks):
-                print(f'TCP Server sending file: {c}')
+            if number_of_chunks == 0:
+                print(f'TCP Server received request to send full file: Number of Chunks -> {number_of_chunks}, Filename -> {filename}')
 
-                filepath = Constants.FILES_PATH / str(peer.id) / c
+                filepath = Constants.FILES_PATH / str(peer.id) / filename
+
+                print(f'TCP Server sending full file: {filename}')
                 with open(filepath, 'rb') as f:
                     while True:
                         bytes_to_read = peer.speed() - 3
                         content = f.read(bytes_to_read)
 
                         if not content:
-                            print(f'TCP reached EOF for file {c}.')
+                            print(f'TCP reached EOF for file {filename}.')
                             break
 
-                        if '.ch' in c:
-                            number = int(c.split('.ch')[1])
-                            full_file = 0
-                        else:
-                            number = 0
-                            full_file = 1
+                        number = 0
+                        full_file = 1
 
                         message = build_file_transfer_message(number, full_file, content)
 
@@ -78,6 +78,32 @@ def transfer_files(connection, peer, socket):
                         connection.sendall(message)
 
                         time.sleep(1)
+            else:
+                print(f'TCP Server received request to send chunks: Number of Chunks -> {number_of_chunks}, Filename -> {filename}, Chunks -> {chunks}')
+
+                for c in chunks:
+                    print(f'TCP Server sending file: Filename -> {filename}, Chunk -> {c}')
+
+                    chunk_filename = f'{filename}.ch{c}'
+                    filepath = Constants.FILES_PATH / str(peer.id) / chunk_filename
+                    with open(filepath, 'rb') as f:
+                        while True:
+                            bytes_to_read = peer.speed() - 3
+                            content = f.read(bytes_to_read)
+
+                            if not content:
+                                print(f'TCP reached EOF for file {chunk_filename}.')
+                                break
+
+                            number = c
+                            full_file = 0
+
+                            message = build_file_transfer_message(number, full_file, content)
+
+                            print(f'TCP Server sending message: {message}')
+                            connection.sendall(message)
+
+                            time.sleep(1)
         except Exception as e:
             print(f'TCP Server -> An error occurred: {e}')
             traceback.print_exc()

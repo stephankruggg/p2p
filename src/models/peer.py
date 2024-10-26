@@ -94,7 +94,7 @@ class Peer:
 
                 semaphore.acquire()
 
-                tcp_client = self._create_tcp_client(address_and_port, chunks, semaphore)
+                tcp_client = self._create_tcp_client(address_and_port, requested_file, chunks, semaphore)
                 clients.append(tcp_client)
                 tcp_client.start()
 
@@ -103,7 +103,7 @@ class Peer:
 
             self._create_full_file(requested_file)
         else:
-            self._fetch_full_file()
+            self._fetch_full_file(requested_file)
 
             print('File downloaded!')
 
@@ -138,7 +138,7 @@ class Peer:
 
             if chunk_name in filenames:
                 self._buffer[c] = {
-                    'chunk': chunk_name,
+                    'chunk': c,
                     'address': 'local',
                     'port': 'local',
                     'time': 0
@@ -163,8 +163,8 @@ class Peer:
         peer_folder = Constants.FILES_PATH / str(self._id)
 
         with open(peer_folder / output_filename, 'wb') as of:
-            for chunk_name in self._buffer[:-1]:
-                with open(peer_folder / chunk_name['chunk'], 'rb') as cf:
+            for chunk in self._buffer[:-1]:
+                with open(peer_folder / f"{output_filename}.ch{chunk['chunk']}", 'rb') as cf:
                     of.write(cf.read())
 
         print('Full file created!')
@@ -208,19 +208,19 @@ class Peer:
 
         return grouped_chunks
 
-    def _fetch_full_file(self):
+    def _fetch_full_file(self, filename):
         info = self._buffer[-1]
 
-        tcp_client = self.create_tcp_client(f"{info['address']} {info['port']}", [info['chunk']])
+        tcp_client = self._create_tcp_client(f"{info['address']} {info['port']}", filename, [])
 
         tcp_client.start()
         tcp_client.join()
 
-    def _create_tcp_client(self, address_and_port, chunks, semaphore = None):
+    def _create_tcp_client(self, address_and_port, filename, chunks, semaphore = None):
         address, port = address_and_port.split(' ')
         port = int(port)
 
-        return TCPClient(self, address, port, semaphore, chunks[0].split('.ch')[0], chunks)
+        return TCPClient(self, address, port, semaphore, filename, chunks)
 
     def reroute(self, ttl, client_id, client_address, client_port, filename):
         message = self._build_flooding_request(client_id, ttl, client_address, client_port, filename)
