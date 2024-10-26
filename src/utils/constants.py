@@ -23,5 +23,5 @@ class Constants:
     # Number of Chunks (1B), Filename (255B String)
     CHUNKS_REQUEST_INITIAL_FORMAT = '!B255s'
 
-    # Chunk number (1B), Full File (1B)
-    CHUNKS_RESPONSE_INITIAL_FORMAT = '!BB'
+    # Chunk number (1B), Full file (1B)
+    CHUNKS_RESPONSE_FILE_SPECIFICATION_FORMAT = '!BB'
