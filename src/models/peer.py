@@ -183,12 +183,12 @@ class Peer:
         chunk_fetching_time = float('inf')
         if all(c is not None for c in self._buffer[:-1]):
             chunk_fetching_time = sum(c['time'] for c in self._buffer[:-1])
-        
+
         file_fetching_time = float('inf')
         if self._buffer[-1] is not None:
             file_fetching_time = self._buffer[-1]['time']
 
-        if chunk_fetching_time >= file_fetching_time:
+        if chunk_fetching_time > file_fetching_time:
             return 'file'
 
         return 'chunks'
